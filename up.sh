@@ -14,7 +14,7 @@ mkdir -p "$RUN"
 
 wait_for() { # url, seconds
   local end=$((SECONDS + $2))
-  until curl -fsS -o /dev/null "$1"; do
+  until curl -fs -o /dev/null "$1"; do
     [ $SECONDS -lt $end ] || { echo "timeout waiting for $1" >&2; exit 1; }
     sleep 3
   done
@@ -47,6 +47,7 @@ export DB_URI="sqlite:$ROOT/.work/nao-data.sqlite"
 export BETTER_AUTH_URL="$AGENT_URL/"
 export BETTER_AUTH_SECRET="local-demo-only-not-a-secret-0123456789abcdef"
 export SUPERSET_EMBED_ORIGIN="$SUPERSET_URL"
+(cd "$NAO_DIR/apps/backend" && bun run db:migrate >"$RUN/migrate.log" 2>&1)
 (cd "$NAO_DIR/cli" && nohup uv run ../apps/backend/fastapi/main.py >"$RUN/fastapi.log" 2>&1 & echo $! >"$RUN/fastapi.pid")
 (cd "$NAO_DIR/apps/backend" && PATH="$NAO_DIR/cli/.venv/bin:$PATH" nohup bun src/index.ts >"$RUN/backend.log" 2>&1 & echo $! >"$RUN/backend.pid")
 wait_for "$AGENT_URL/api/health" 180
