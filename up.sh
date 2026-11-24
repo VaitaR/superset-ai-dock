@@ -41,6 +41,12 @@ echo "== nao: services"
 for name in backend fastapi; do
   [ -f "$RUN/$name.pid" ] && kill "$(cat "$RUN/$name.pid")" 2>/dev/null || true
 done
+# Also free the ports: a leftover process from an earlier run would keep serving its old build.
+for port in 5005 8005; do
+  pids="$(lsof -tiTCP:$port -sTCP:LISTEN 2>/dev/null || true)"
+  [ -z "$pids" ] || kill $pids 2>/dev/null || true
+done
+sleep 2
 export EXAMPLES_DB_PASSWORD=superset
 export NAO_DEFAULT_PROJECT_PATH="$ROOT/context"
 export DB_URI="sqlite:$ROOT/.work/nao-data.sqlite"

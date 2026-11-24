@@ -8,7 +8,7 @@ in `nao/NAO_COMMIT`.
 
 | What | Number | Command |
 |---|---|---|
-| Source and migrations, excluding tests and generated files | 22 files, +452 -5 | `git -C .work/nao diff --numstat <pin> HEAD -- . ':!*.test.ts' ':!apps/frontend/src/routeTree.gen.ts' ':!*/meta/_journal.json'` |
+| Source and migrations, excluding tests and generated files | 22 files, +453 -5 | `git -C .work/nao diff --numstat <pin> HEAD -- . ':!*.test.ts' ':!apps/frontend/src/routeTree.gen.ts' ':!*/meta/_journal.json'` |
 | Tests | 4 files, +229 | `git -C .work/nao diff --numstat <pin> HEAD -- '*.test.ts'` |
 | Generated migration journals (not counted above) | 2 files, +14 | `git -C .work/nao diff --numstat <pin> HEAD -- '*/meta/_journal.json'` |
 | Patch files | 4 | `ls nao/patches/*.patch \| wc -l` |
