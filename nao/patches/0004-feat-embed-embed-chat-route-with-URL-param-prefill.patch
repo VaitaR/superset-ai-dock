@@ -1,0 +1,236 @@
+From d4004bc4959bcb79fb3168fec7d73af8e6ddc663 Mon Sep 17 00:00:00 2001
+From: demo <demo@example.invalid>
+Date: Tue, 24 Nov 2026 17:01:46 +0300
+Subject: [PATCH 4/4] feat(embed): /embed/chat route with URL-param prefill
+
+---
+ .../hooks/use-superset-embed-prefill.test.ts  | 62 +++++++++++++
+ .../src/hooks/use-superset-embed-prefill.ts   | 48 ++++++++++
+ apps/frontend/src/routes/embed.chat.tsx       | 91 +++++++++++++++++++
+ 3 files changed, 201 insertions(+)
+ create mode 100644 apps/frontend/src/hooks/use-superset-embed-prefill.test.ts
+ create mode 100644 apps/frontend/src/hooks/use-superset-embed-prefill.ts
+ create mode 100644 apps/frontend/src/routes/embed.chat.tsx
+
+diff --git a/apps/frontend/src/hooks/use-superset-embed-prefill.test.ts b/apps/frontend/src/hooks/use-superset-embed-prefill.test.ts
+new file mode 100644
+index 0000000..b01c969
+--- /dev/null
++++ b/apps/frontend/src/hooks/use-superset-embed-prefill.test.ts
+@@ -0,0 +1,62 @@
++// @vitest-environment jsdom
++
++import { renderHook } from '@testing-library/react';
++import { afterEach, describe, expect, it, vi } from 'vitest';
++
++import { useSupersetEmbedPrefill } from './use-superset-embed-prefill';
++import type { SupersetLinkSearch } from '@/lib/superset-link-prefill';
++import { chatPendingSupersetContextStore } from '@/stores/chat-pending-superset-context';
++
++const setup = (search: SupersetLinkSearch) => {
++	const queueOrSendMessage = vi.fn();
++	const setChatInputText = vi.fn();
++	const clearSearchParams = vi.fn();
++	const view = renderHook(
++		(props: SupersetLinkSearch) =>
++			useSupersetEmbedPrefill({ search: props, queueOrSendMessage, setChatInputText, clearSearchParams }),
++		{ initialProps: search },
++	);
++	return { queueOrSendMessage, setChatInputText, clearSearchParams, ...view };
++};
++
++describe('useSupersetEmbedPrefill', () => {
++	afterEach(() => chatPendingSupersetContextStore.clear());
++
++	it('prefills the composer with the bare question and holds the identifiers as pending context', () => {
++		const { queueOrSendMessage, setChatInputText, clearSearchParams } = setup({
++			q: 'why did revenue drop?',
++			dashboardId: '75',
++		});
++
++		expect(setChatInputText).toHaveBeenCalledWith('why did revenue drop?');
++		expect(chatPendingSupersetContextStore.getSnapshot()).toEqual({ dashboardId: '75' });
++		expect(queueOrSendMessage).not.toHaveBeenCalled();
++		expect(clearSearchParams).toHaveBeenCalledTimes(1);
++	});
++
++	it('sends the question with the context as a field when autosend is set', () => {
++		const { queueOrSendMessage, setChatInputText } = setup({ q: 'why?', dashboardId: '75', autosend: true });
++
++		expect(queueOrSendMessage).toHaveBeenCalledWith({ text: 'why?', supersetContext: { dashboardId: '75' } });
++		expect(setChatInputText).not.toHaveBeenCalled();
++		expect(chatPendingSupersetContextStore.getSnapshot()).toBeNull();
++	});
++
++	it('does nothing when there are no Superset link params', () => {
++		const { queueOrSendMessage, setChatInputText, clearSearchParams } = setup({});
++
++		expect(queueOrSendMessage).not.toHaveBeenCalled();
++		expect(setChatInputText).not.toHaveBeenCalled();
++		expect(clearSearchParams).not.toHaveBeenCalled();
++	});
++
++	it('consumes the link only once across re-renders', () => {
++		const search = { q: 'why?' };
++		const { setChatInputText, clearSearchParams, rerender } = setup(search);
++		rerender(search);
++		rerender(search);
++
++		expect(setChatInputText).toHaveBeenCalledTimes(1);
++		expect(clearSearchParams).toHaveBeenCalledTimes(1);
++	});
++});
+diff --git a/apps/frontend/src/hooks/use-superset-embed-prefill.ts b/apps/frontend/src/hooks/use-superset-embed-prefill.ts
+new file mode 100644
+index 0000000..b13bcfe
+--- /dev/null
++++ b/apps/frontend/src/hooks/use-superset-embed-prefill.ts
+@@ -0,0 +1,48 @@
++import { useEffect, useRef } from 'react';
++
++import type { SupersetLinkSearch } from '@/lib/superset-link-prefill';
++import type { SendMessageArgs } from '@/hooks/use-agent';
++import { chatPendingSupersetContextStore } from '@/stores/chat-pending-superset-context';
++import { buildSupersetContext, hasSupersetLinkParams } from '@/lib/superset-link-prefill';
++
++export interface UseSupersetEmbedPrefillArgs {
++	search: SupersetLinkSearch;
++	queueOrSendMessage: (message: Pick<SendMessageArgs, 'text' | 'supersetContext'>) => void | Promise<void>;
++	setChatInputText: (text: string) => void;
++	clearSearchParams: () => void;
++}
++
++/**
++ * Consumes the Superset link params once per page load: the identifiers go to the pending-context
++ * store (shown as a chip, sent beside the question), the question prefills the composer or, for
++ * `autosend`, is sent at once. The params are then stripped from the URL.
++ */
++export function useSupersetEmbedPrefill({
++	search,
++	queueOrSendMessage,
++	setChatInputText,
++	clearSearchParams,
++}: UseSupersetEmbedPrefillArgs): void {
++	const consumed = useRef(false);
++
++	useEffect(() => {
++		if (consumed.current || !hasSupersetLinkParams(search)) {
++			return;
++		}
++		consumed.current = true;
++
++		const supersetContext = buildSupersetContext(search);
++		if (search.q && search.autosend) {
++			void queueOrSendMessage({ text: search.q, supersetContext });
++		} else {
++			if (supersetContext) {
++				chatPendingSupersetContextStore.set(supersetContext);
++			}
++			if (search.q) {
++				setChatInputText(search.q);
++			}
++		}
++
++		clearSearchParams();
++	}, [search, queueOrSendMessage, setChatInputText, clearSearchParams]);
++}
+diff --git a/apps/frontend/src/routes/embed.chat.tsx b/apps/frontend/src/routes/embed.chat.tsx
+new file mode 100644
+index 0000000..8a90c20
+--- /dev/null
++++ b/apps/frontend/src/routes/embed.chat.tsx
+@@ -0,0 +1,91 @@
++import { createFileRoute, useNavigate } from '@tanstack/react-router';
++import { useCallback } from 'react';
++
++import { ChatInput } from '@/components/chat-input';
++import { ChatMessages } from '@/components/chat-messages/chat-messages';
++import { Button } from '@/components/ui/button';
++import { Spinner } from '@/components/ui/spinner';
++import { AgentProvider, useAgentContext } from '@/contexts/agent.provider';
++import { SetChatInputCallbackProvider, useSetChatInputCallback } from '@/contexts/set-chat-input-callback';
++import { useSupersetEmbedPrefill } from '@/hooks/use-superset-embed-prefill';
++import { useSession } from '@/lib/auth-client';
++import { parseSupersetLinkSearch } from '@/lib/superset-link-prefill';
++
++/**
++ * Compact chat for a Superset dashboard `<iframe>` tile (the header side is
++ * apps/backend/src/middleware/embed-frame-ancestors.ts). Only the conversation and the composer:
++ * no sidebar, chat list or account row, so it stays legible in a short tile.
++ *
++ * Auth is the ordinary session cookie, which the frame carries when it is same-site with Superset.
++ * Without a session it renders a compact sign-in prompt, since a redirect would break out of the tile.
++ */
++export const Route = createFileRoute('/embed/chat')({
++	validateSearch: parseSupersetLinkSearch,
++	component: EmbedChatPage,
++});
++
++function EmbedChatPage() {
++	const { data: session, isPending } = useSession();
++
++	if (isPending) {
++		return (
++			<div className='flex h-full min-h-0 flex-1 items-center justify-center'>
++				<Spinner className='size-5' />
++			</div>
++		);
++	}
++
++	if (!session) {
++		return <EmbedSignInPrompt />;
++	}
++
++	return (
++		<SetChatInputCallbackProvider>
++			<AgentProvider disableNavigation>
++				<EmbedChatContent />
++			</AgentProvider>
++		</SetChatInputCallbackProvider>
++	);
++}
++
++function EmbedSignInPrompt() {
++	return (
++		<div className='flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-center'>
++			<p className='text-sm text-muted-foreground'>Sign in to use this chat.</p>
++			<Button asChild size='sm'>
++				<a href='/login' target='_top' rel='noopener noreferrer'>
++					Sign in
++				</a>
++			</Button>
++		</div>
++	);
++}
++
++function EmbedChatContent() {
++	const { messages, queueOrSendMessage } = useAgentContext();
++	const setChatInput = useSetChatInputCallback();
++	const search = Route.useSearch();
++	const navigate = useNavigate();
++
++	const clearSearchParams = useCallback(() => {
++		void navigate({ to: '/embed/chat', search: {}, replace: true });
++	}, [navigate]);
++
++	useSupersetEmbedPrefill({
++		search,
++		queueOrSendMessage,
++		setChatInputText: setChatInput.fire,
++		clearSearchParams,
++	});
++
++	return (
++		<div className='flex h-full min-h-0 flex-1 flex-col bg-panel'>
++			{messages.length > 0 && (
++				<div className='min-h-0 flex-1'>
++					<ChatMessages />
++				</div>
++			)}
++			<ChatInput />
++		</div>
++	);
++}
+-- 
+2.54.0 (Apple Git-157)
+

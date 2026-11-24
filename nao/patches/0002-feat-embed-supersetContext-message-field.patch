@@ -1,0 +1,385 @@
+From 0b56ab63ab12388b8321cc19c188b69979427358 Mon Sep 17 00:00:00 2001
+From: demo <demo@example.invalid>
+Date: Tue, 24 Nov 2026 16:49:25 +0300
+Subject: [PATCH 2/4] feat(embed): supersetContext message field
+
+Carries where a question was asked from in Superset (dashboard, chart, filters,
+time range) as a structured field on the user message, persisted in
+chat_message.superset_context and stated to the model by a small block.
+---
+ .../0120_add_superset_context_column.sql      |  1 +
+ .../migrations-postgres/meta/_journal.json    |  7 ++++
+ .../0120_add_superset_context_column.sql      |  1 +
+ .../migrations-sqlite/meta/_journal.json      |  7 ++++
+ apps/backend/src/db/pg-schema.ts              |  2 +
+ apps/backend/src/db/sqlite-schema.ts          |  2 +
+ apps/backend/src/handlers/agent.ts            |  3 +-
+ apps/backend/src/queries/chat.queries.ts      |  5 +++
+ apps/backend/src/services/agent.ts            | 18 ++++++++-
+ .../src/services/superset-context-block.ts    | 38 ++++++++++++++++++
+ apps/backend/src/types/chat.ts                | 11 ++++++
+ .../tests/superset-context-block.test.ts      | 39 +++++++++++++++++++
+ apps/shared/src/types.ts                      | 10 +++++
+ 13 files changed, 142 insertions(+), 2 deletions(-)
+ create mode 100644 apps/backend/migrations-postgres/0120_add_superset_context_column.sql
+ create mode 100644 apps/backend/migrations-sqlite/0120_add_superset_context_column.sql
+ create mode 100644 apps/backend/src/services/superset-context-block.ts
+ create mode 100644 apps/backend/tests/superset-context-block.test.ts
+
+diff --git a/apps/backend/migrations-postgres/0120_add_superset_context_column.sql b/apps/backend/migrations-postgres/0120_add_superset_context_column.sql
+new file mode 100644
+index 0000000..5062ad1
+--- /dev/null
++++ b/apps/backend/migrations-postgres/0120_add_superset_context_column.sql
+@@ -0,0 +1 @@
++ALTER TABLE "chat_message" ADD COLUMN "superset_context" jsonb;
+\ No newline at end of file
+diff --git a/apps/backend/migrations-postgres/meta/_journal.json b/apps/backend/migrations-postgres/meta/_journal.json
+index 196196b..b8158b1 100644
+--- a/apps/backend/migrations-postgres/meta/_journal.json
++++ b/apps/backend/migrations-postgres/meta/_journal.json
+@@ -841,6 +841,13 @@
+       "when": 1795519219785,
+       "tag": "0119_decision_models",
+       "breakpoints": true
++    },
++    {
++      "idx": 120,
++      "version": "7",
++      "when": 1795527901000,
++      "tag": "0120_add_superset_context_column",
++      "breakpoints": true
+     }
+   ]
+ }
+\ No newline at end of file
+diff --git a/apps/backend/migrations-sqlite/0120_add_superset_context_column.sql b/apps/backend/migrations-sqlite/0120_add_superset_context_column.sql
+new file mode 100644
+index 0000000..bf5a5e2
+--- /dev/null
++++ b/apps/backend/migrations-sqlite/0120_add_superset_context_column.sql
+@@ -0,0 +1 @@
++ALTER TABLE `chat_message` ADD `superset_context` text;
+\ No newline at end of file
+diff --git a/apps/backend/migrations-sqlite/meta/_journal.json b/apps/backend/migrations-sqlite/meta/_journal.json
+index 522ae74..c12fea5 100644
+--- a/apps/backend/migrations-sqlite/meta/_journal.json
++++ b/apps/backend/migrations-sqlite/meta/_journal.json
+@@ -841,6 +841,13 @@
+       "when": 1795519218063,
+       "tag": "0119_decision_models",
+       "breakpoints": true
++    },
++    {
++      "idx": 120,
++      "version": "6",
++      "when": 1795527900000,
++      "tag": "0120_add_superset_context_column",
++      "breakpoints": true
+     }
+   ]
+ }
+\ No newline at end of file
+diff --git a/apps/backend/src/db/pg-schema.ts b/apps/backend/src/db/pg-schema.ts
+index 1c1e907..b37325e 100644
+--- a/apps/backend/src/db/pg-schema.ts
++++ b/apps/backend/src/db/pg-schema.ts
+@@ -31,6 +31,7 @@ import type {
+ 	LlmProvider,
+ 	NotificationChannel,
+ 	RepoProvider,
++	SupersetContext,
+ } from '@nao/shared/types';
+ import {
+ 	ANALYTICS_ASSET_TYPES,
+@@ -561,6 +562,7 @@ export const chatMessage = pgTable(
+ 		source: text('source', { enum: MESSAGE_SOURCES }),
+ 		isForked: boolean('isForked'),
+ 		citations: jsonb('citations').$type<CitationData[]>(),
++		supersetContext: jsonb('superset_context').$type<SupersetContext>(),
+ 		discordMessageId: text('discord_message_id'),
+ 		createdAt: timestamp('created_at').defaultNow().notNull(),
+ 
+diff --git a/apps/backend/src/db/sqlite-schema.ts b/apps/backend/src/db/sqlite-schema.ts
+index c645ab4..bfb68bf 100644
+--- a/apps/backend/src/db/sqlite-schema.ts
++++ b/apps/backend/src/db/sqlite-schema.ts
+@@ -31,6 +31,7 @@ import type {
+ 	LlmProvider,
+ 	NotificationChannel,
+ 	RepoProvider,
++	SupersetContext,
+ } from '@nao/shared/types';
+ import {
+ 	ANALYTICS_ASSET_TYPES,
+@@ -591,6 +592,7 @@ export const chatMessage = sqliteTable(
+ 		source: text('source', { enum: MESSAGE_SOURCES }),
+ 		isForked: integer('isForked', { mode: 'boolean' }),
+ 		citations: text('citations', { mode: 'json' }).$type<CitationData[]>(),
++		supersetContext: text('superset_context', { mode: 'json' }).$type<SupersetContext>(),
+ 		discordMessageId: text('discord_message_id'),
+ 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+ 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+diff --git a/apps/backend/src/handlers/agent.ts b/apps/backend/src/handlers/agent.ts
+index 5d36b92..52c9108 100644
+--- a/apps/backend/src/handlers/agent.ts
++++ b/apps/backend/src/handlers/agent.ts
+@@ -215,7 +215,7 @@ const createChat = async (
+ 	const title = createChatTitle(message);
+ 	return await chatQueries.createChat(
+ 		{ title, userId, projectId },
+-		{ text: message.text, citations: message.citations, source },
++		{ text: message.text, citations: message.citations, supersetContext: message.supersetContext, source },
+ 		attachmentParts,
+ 	);
+ };
+@@ -252,6 +252,7 @@ const insertOrSupersedeMessage = async (opts: {
+ 		senderUserId: userId,
+ 		source,
+ 		citations: message.citations,
++		supersetContext: message.supersetContext,
+ 		versionGroupId,
+ 	});
+ };
+diff --git a/apps/backend/src/queries/chat.queries.ts b/apps/backend/src/queries/chat.queries.ts
+index 31fd175..4a65e15 100644
+--- a/apps/backend/src/queries/chat.queries.ts
++++ b/apps/backend/src/queries/chat.queries.ts
+@@ -5,6 +5,7 @@ import type {
+ 	GroupedChatListResponse,
+ 	LlmProvider,
+ 	LlmSelectedModel,
++	SupersetContext,
+ } from '@nao/shared/types';
+ import {
+ 	and,
+@@ -329,6 +330,7 @@ const aggregateChatMessagParts = (
+ 					source: row.chat_message.source ?? undefined,
+ 					isForked: row.chat_message.isForked ?? undefined,
+ 					citations: row.chat_message.citations ?? undefined,
++					supersetContext: row.chat_message.supersetContext ?? undefined,
+ 					stopReason: row.chat_message.stopReason ?? undefined,
+ 					llmProvider: row.chat_message.llmProvider ?? undefined,
+ 					createdAt: row.chat_message.createdAt?.getTime(),
+@@ -581,6 +583,7 @@ export const createChat = async (
+ 		text: string;
+ 		source?: UIMessage['source'];
+ 		citations?: CitationData[];
++		supersetContext?: SupersetContext;
+ 	},
+ 	additionalParts: UIMessagePart[] = [],
+ ): Promise<[DBChat, DBChatMessage]> => {
+@@ -597,6 +600,7 @@ export const createChat = async (
+ 				role: 'user',
+ 				source: newUserMessage.source,
+ 				citations: newUserMessage.citations ?? null,
++				supersetContext: newUserMessage.supersetContext ?? null,
+ 				versionGroupId: messageId,
+ 			})
+ 			.returning()
+@@ -686,6 +690,7 @@ export const upsertMessage = async (
+ 			source: message.source,
+ 			isForked: message.isForked,
+ 			citations: message.citations ?? null,
++			supersetContext: message.supersetContext ?? null,
+ 			versionGroupId: message.versionGroupId ?? (message.role === 'user' ? messageId : undefined),
+ 			...message.tokenUsage,
+ 		};
+diff --git a/apps/backend/src/services/agent.ts b/apps/backend/src/services/agent.ts
+index bbde570..5693ac7 100644
+--- a/apps/backend/src/services/agent.ts
++++ b/apps/backend/src/services/agent.ts
+@@ -137,6 +137,7 @@ import {
+ import { customStoryAuthoringError } from './story-mount';
+ import { resolveStoryOriginConversationSafely } from './story-origin';
+ import { addStoryQuestionReference, resolveLinkedStory } from './story-question';
++import { buildSupersetContextBlock } from './superset-context-block';
+ import {
+ 	describeShownStoryFilters,
+ 	keepStoryReferencesThroughCompaction,
+@@ -855,7 +856,8 @@ export class AgentManager {
+ 		const uiMessagesWithStoryMode = this._addStoryMode(uiMessagesWithCollapsedStories, mentions);
+ 		const uiMessagesWithSkills = this._addSkills(uiMessagesWithStoryMode, mentions);
+ 		const uiMessagesWithCitation = this._addCitationContext(uiMessagesWithSkills);
+-		const uiMessagesWithStoryFilters = await this._addStoryFilterContext(uiMessagesWithCitation, storyFilters);
++		const uiMessagesWithSuperset = this._addSupersetContext(uiMessagesWithCitation);
++		const uiMessagesWithStoryFilters = await this._addStoryFilterContext(uiMessagesWithSuperset, storyFilters);
+ 		const uiMessagesWithDbContext = this._addDatabaseContext(uiMessagesWithStoryFilters, mentions);
+ 		const uiMessagesWithStoryQuestion = addStoryQuestionReference(uiMessagesWithDbContext, this.chat.forkMetadata);
+ 		const uiMessagesWithCompaction = keepStoryReferencesThroughCompaction(
+@@ -1250,6 +1252,20 @@ export class AgentManager {
+ 		}
+ 	}
+ 
++	/**
++	 * Where the question was asked from in Superset, carried as a field on the message rather than
++	 * pasted into it. The wording lives in `buildSupersetContextBlock`.
++	 */
++	private _addSupersetContext(messages: UIMessage[]): UIMessage[] {
++		const [lastUserMessage] = findLastUserMessage(messages);
++		const block = lastUserMessage?.supersetContext && buildSupersetContextBlock(lastUserMessage.supersetContext);
++		if (!block) {
++			return messages;
++		}
++
++		return this._transformLastUserMessageText(messages, (text) => (text ? `${block}\n\n${text}` : block));
++	}
++
+ 	private _addCitationContext(messages: UIMessage[]): UIMessage[] {
+ 		const messagesWithQuotes = quoteEarlierCitations(messages);
+ 		const [lastUserMessage] = findLastUserMessage(messagesWithQuotes);
+diff --git a/apps/backend/src/services/superset-context-block.ts b/apps/backend/src/services/superset-context-block.ts
+new file mode 100644
+index 0000000..7223ab2
+--- /dev/null
++++ b/apps/backend/src/services/superset-context-block.ts
+@@ -0,0 +1,38 @@
++import type { SupersetContext } from '@nao/shared/types';
++
++/**
++ * How Superset identifiers are phrased for the model. They travel as a field on the user message,
++ * so this is the single place their wording is decided.
++ *
++ * A bare id is useless to the model, so the block names the lookup instead: the project context
++ * keys dashboards by their numeric id, which the context tools can search for.
++ *
++ * Returns `undefined` when the context carries no identifier worth stating.
++ */
++export function buildSupersetContextBlock({
++	dashboardId,
++	chartId,
++	filters,
++	timeRange,
++}: SupersetContext): string | undefined {
++	const lines = [
++		dashboardId && `Dashboard id: ${dashboardId}`,
++		chartId && `Chart id: ${chartId}`,
++		filters && `Filters active on it: ${filters}`,
++		timeRange && `Time range selected on it: ${timeRange}`,
++	].filter((line): line is string => Boolean(line));
++	if (lines.length === 0) {
++		return undefined;
++	}
++
++	return [
++		'[The user is asking from a Superset dashboard.',
++		...lines,
++		dashboardId
++			? `Search the project context for "${dashboardId}" before answering: dashboards are keyed by that id, and the entry says what the dashboard measures and which tables it reads. Do not assume what it shows.`
++			: '',
++		'Answer the question itself; this is where it came from, not what was asked.]',
++	]
++		.filter(Boolean)
++		.join('\n');
++}
+diff --git a/apps/backend/src/types/chat.ts b/apps/backend/src/types/chat.ts
+index fe62591..ef9ddad 100644
+--- a/apps/backend/src/types/chat.ts
++++ b/apps/backend/src/types/chat.ts
+@@ -6,6 +6,8 @@ import {
+ 	type LlmProvider,
+ 	MAX_CITATION_TEXT_LENGTH,
+ 	MAX_CITATIONS_PER_MESSAGE,
++	MAX_SUPERSET_CONTEXT_VALUE_LENGTH,
++	type SupersetContext,
+ } from '@nao/shared/types';
+ import {
+ 	DynamicToolUIPart,
+@@ -99,6 +101,7 @@ export type UIMessage = UIGenericMessage<unknown, MessageCustomDataParts, UITool
+ 	source?: MessageSource;
+ 	isForked?: boolean;
+ 	citations?: CitationData[];
++	supersetContext?: SupersetContext;
+ 	stopReason?: StopReason;
+ 	/** Provider that generated an assistant message. */
+ 	llmProvider?: LlmProvider;
+@@ -244,12 +247,20 @@ export const CitationDataSchema = z.object({
+ 	intent: z.enum(['ask', 'edit']).optional(),
+ });
+ 
++export const SupersetContextSchema = z.object({
++	dashboardId: z.string().max(MAX_SUPERSET_CONTEXT_VALUE_LENGTH).optional(),
++	chartId: z.string().max(MAX_SUPERSET_CONTEXT_VALUE_LENGTH).optional(),
++	filters: z.string().max(MAX_SUPERSET_CONTEXT_VALUE_LENGTH).optional(),
++	timeRange: z.string().max(MAX_SUPERSET_CONTEXT_VALUE_LENGTH).optional(),
++});
++
+ export type AgentRequestUserMessage = z.infer<typeof AgentRequestUserMessageSchema>;
+ export const AgentRequestUserMessageSchema = z.object({
+ 	text: z.string(),
+ 	images: z.array(AgentRequestImageSchema).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
+ 	documents: z.array(AgentRequestDocumentPathSchema).max(MAX_ATTACHMENTS_PER_MESSAGE).optional(),
+ 	citations: z.array(CitationDataSchema).max(MAX_CITATIONS_PER_MESSAGE).optional(),
++	supersetContext: SupersetContextSchema.optional(),
+ });
+ 
+ const ShownStoryFiltersSchema = z.object({
+diff --git a/apps/backend/tests/superset-context-block.test.ts b/apps/backend/tests/superset-context-block.test.ts
+new file mode 100644
+index 0000000..c6a9d0d
+--- /dev/null
++++ b/apps/backend/tests/superset-context-block.test.ts
+@@ -0,0 +1,39 @@
++import { describe, expect, it } from 'vitest';
++
++import { buildSupersetContextBlock } from '../src/services/superset-context-block';
++
++describe('buildSupersetContextBlock', () => {
++	it('is undefined when no identifier is set, so an empty object never reaches the turn', () => {
++		expect(buildSupersetContextBlock({})).toBeUndefined();
++		expect(buildSupersetContextBlock({ dashboardId: '' })).toBeUndefined();
++	});
++
++	it('states every identifier it was given', () => {
++		const block = buildSupersetContextBlock({
++			dashboardId: '13',
++			chartId: '456',
++			filters: 'country=US',
++			timeRange: 'Last 7 days',
++		});
++		expect(block).toContain('Dashboard id: 13');
++		expect(block).toContain('Chart id: 456');
++		expect(block).toContain('Filters active on it: country=US');
++		expect(block).toContain('Time range selected on it: Last 7 days');
++	});
++
++	it('tells the model to look the dashboard up by its id', () => {
++		expect(buildSupersetContextBlock({ dashboardId: '13' })).toContain('Search the project context for "13"');
++	});
++
++	it('omits the lookup instruction when there is no dashboard id to look up', () => {
++		const block = buildSupersetContextBlock({ chartId: '456' });
++		expect(block).toContain('Chart id: 456');
++		expect(block).not.toContain('Search the project context');
++	});
++
++	it('is bracketed so the model reads it as provenance, not as the question', () => {
++		const block = buildSupersetContextBlock({ dashboardId: '13' });
++		expect(block?.startsWith('[')).toBe(true);
++		expect(block?.endsWith(']')).toBe(true);
++	});
++});
+diff --git a/apps/shared/src/types.ts b/apps/shared/src/types.ts
+index b37f67e..0a33eeb 100644
+--- a/apps/shared/src/types.ts
++++ b/apps/shared/src/types.ts
+@@ -599,6 +599,16 @@ export type AnalyticsEventMetadata =
+ export const MAX_CITATIONS_PER_MESSAGE = 100;
+ export const MAX_CITATION_TEXT_LENGTH = 10_000;
+ 
++/** Where a question was asked from in Superset; every value is capped so a URL cannot smuggle a prompt. */
++export const MAX_SUPERSET_CONTEXT_VALUE_LENGTH = 300;
++
++export interface SupersetContext {
++	dashboardId?: string;
++	chartId?: string;
++	filters?: string;
++	timeRange?: string;
++}
++
+ export interface CitationData {
+ 	start: number;
+ 	end: number;
+-- 
+2.54.0 (Apple Git-157)
+

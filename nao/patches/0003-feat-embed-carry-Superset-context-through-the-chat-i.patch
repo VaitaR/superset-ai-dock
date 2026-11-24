@@ -1,0 +1,455 @@
+From 42797c01145321a4c7a4ff54028ab78c4bd22942 Mon Sep 17 00:00:00 2001
+From: demo <demo@example.invalid>
+Date: Tue, 24 Nov 2026 17:01:46 +0300
+Subject: [PATCH 3/4] feat(embed): carry Superset context through the chat
+ input
+
+---
+ apps/frontend/src/components/chat-input.tsx   | 23 +++++-
+ .../components/chat-messages/user-message.tsx |  2 +
+ .../src/components/superset-context-chip.tsx  | 54 +++++++++++++
+ apps/frontend/src/hooks/use-agent.ts          | 13 +++-
+ .../use-chat-pending-superset-context.ts      |  7 ++
+ .../src/lib/superset-link-prefill.test.ts     | 77 +++++++++++++++++++
+ .../frontend/src/lib/superset-link-prefill.ts | 68 ++++++++++++++++
+ .../stores/chat-pending-superset-context.ts   | 25 ++++++
+ 8 files changed, 266 insertions(+), 3 deletions(-)
+ create mode 100644 apps/frontend/src/components/superset-context-chip.tsx
+ create mode 100644 apps/frontend/src/hooks/use-chat-pending-superset-context.ts
+ create mode 100644 apps/frontend/src/lib/superset-link-prefill.test.ts
+ create mode 100644 apps/frontend/src/lib/superset-link-prefill.ts
+ create mode 100644 apps/frontend/src/stores/chat-pending-superset-context.ts
+
+diff --git a/apps/frontend/src/components/chat-input.tsx b/apps/frontend/src/components/chat-input.tsx
+index 69b1c33..6ce9bab 100644
+--- a/apps/frontend/src/components/chat-input.tsx
++++ b/apps/frontend/src/components/chat-input.tsx
+@@ -96,6 +96,9 @@ import {
+ 	writeCitedText,
+ } from '@/lib/citation-mention';
+ import { useCitationPills } from '@/hooks/use-citation-pills';
++import { chatPendingSupersetContextStore } from '@/stores/chat-pending-superset-context';
++import { useChatPendingSupersetContext } from '@/hooks/use-chat-pending-superset-context';
++import { SupersetContextChip } from '@/components/superset-context-chip';
+ import { useOpenCitation } from '@/hooks/use-open-citation';
+ import { CitationPillPreview } from '@/components/citation-pill-preview';
+ import { useEffectiveUserGroupFeatures } from '@/hooks/use-effective-user-group-features';
+@@ -541,6 +544,7 @@ function ChatInputBase({
+ 			const pendingCitations =
+ 				citationSnapshot && citationSnapshot.chatId === citationScope ? citationSnapshot.citations : [];
+ 			const hasCitation = pendingCitations.length > 0;
++			const supersetContext = chatPendingSupersetContextStore.getSnapshot() ?? undefined;
+ 
+ 			if (!trimmedInput && !attachmentUpload.hasAttachments && !hasCitation) {
+ 				if (isRunning && allowQueueing) {
+@@ -567,6 +571,7 @@ function ChatInputBase({
+ 				if (hasCitation) {
+ 					citationStore.clear();
+ 				}
++				chatPendingSupersetContextStore.clear();
+ 
+ 				const mentions = toContextMentions(currentMentions);
+ 				setMentions(mentions);
+@@ -578,7 +583,15 @@ function ChatInputBase({
+ 
+ 				const steer = steerOnEnter !== isSwapShortcutRef.current;
+ 				isSwapShortcutRef.current = false;
+-				return onSubmitMessage({ text: message.text, images, documents, citations, mentions, steer });
++				return onSubmitMessage({
++					text: message.text,
++					images,
++					documents,
++					citations,
++					supersetContext,
++					mentions,
++					steer,
++				});
+ 			});
+ 		},
+ 		[
+@@ -625,6 +638,7 @@ function ChatInputBase({
+ 		await submitMessage(inputText, mentions);
+ 	};
+ 	const pendingCitations = useChatPendingCitations(citationStore, citationScope);
++	const pendingSupersetContext = useChatPendingSupersetContext();
+ 	const removePendingCitation = useCallback(
+ 		(id: string) => citationStore.remove(citationScope, id),
+ 		[citationScope, citationStore],
+@@ -769,6 +783,13 @@ function ChatInputBase({
+ 					)}
+ 				>
+ 					{!isAdminMode && (variant === 'default' || variant === 'onboarding') && <ChatInputAnimatedBorder />}
++					{pendingSupersetContext && (
++						<SupersetContextChip
++							context={pendingSupersetContext}
++							onRemove={chatPendingSupersetContextStore.clear}
++							className='mx-3 mt-3 md:mx-4'
++						/>
++					)}
+ 					<ChatInputAttachmentPreview
+ 						attachments={attachmentUpload.attachments}
+ 						rejection={attachmentUpload.rejection}
+diff --git a/apps/frontend/src/components/chat-messages/user-message.tsx b/apps/frontend/src/components/chat-messages/user-message.tsx
+index b55400f..ec3f57c 100644
+--- a/apps/frontend/src/components/chat-messages/user-message.tsx
++++ b/apps/frontend/src/components/chat-messages/user-message.tsx
+@@ -21,6 +21,7 @@ import { parseChatMessageCitation } from '@/lib/chat-messages-citation-parser';
+ import { CITATION_MENTION_TRIGGER, placeCitationsInline, toSentCitationOptions } from '@/lib/citation-mention';
+ import { useOpenCitation } from '@/hooks/use-open-citation';
+ import { CitationPillPreview } from '@/components/citation-pill-preview';
++import { SupersetContextChip } from '@/components/superset-context-chip';
+ import { Button } from '@/components/ui/button';
+ import { SimpleTooltip } from '@/components/ui/tooltip';
+ import { useTimeAgo } from '@/hooks/use-time-ago';
+@@ -150,6 +151,7 @@ export const UserMessageBubble = memo(({ message }: { message: UIMessage }) => {
+ 	return (
+ 		<div className='rounded-2xl px-3 py-2 bg-panel text-card-foreground ml-auto max-w-xl'>
+ 			<MessageSourceBadge source={message.source} />
++			{message.supersetContext && <SupersetContextChip context={message.supersetContext} className='mb-2' />}
+ 			{images.length > 0 && (
+ 				<div className='flex gap-2 flex-wrap mb-2'>
+ 					{images.map((img, idx) => (
+diff --git a/apps/frontend/src/components/superset-context-chip.tsx b/apps/frontend/src/components/superset-context-chip.tsx
+new file mode 100644
+index 0000000..0948d4c
+--- /dev/null
++++ b/apps/frontend/src/components/superset-context-chip.tsx
+@@ -0,0 +1,54 @@
++import { LayoutDashboard, X } from 'lucide-react';
++import type { SupersetContext } from '@nao/shared/types';
++
++import { cn } from '@/lib/utils';
++
++interface SupersetContextChipProps {
++	context: SupersetContext;
++	/** Omitted on a sent message, where there is nothing left to dismiss. */
++	onRemove?: () => void;
++	className?: string;
++}
++
++/**
++ * Shows what the Superset link attached to the question. It is visible on purpose: the
++ * identifiers are sent to the agent without appearing in the message text, and the user should be
++ * able to see that and drop it before sending.
++ */
++export const SupersetContextChip = ({ context, onRemove, className }: SupersetContextChipProps) => {
++	const parts = describeSupersetContext(context);
++	if (parts.length === 0) {
++		return null;
++	}
++
++	return (
++		<div
++			className={cn(
++				'flex items-center gap-2 px-3 py-1.5 border border-border/50 bg-background/50 rounded-lg text-xs text-muted-foreground',
++				className,
++			)}
++		>
++			<LayoutDashboard className='size-3.5 shrink-0' />
++			<span className='truncate'>{parts.join(' · ')}</span>
++			{onRemove ? (
++				<button
++					type='button'
++					onClick={onRemove}
++					aria-label='Remove Superset context'
++					className='ml-auto shrink-0 cursor-pointer hover:text-foreground transition-colors'
++				>
++					<X className='size-3.5' />
++				</button>
++			) : null}
++		</div>
++	);
++};
++
++export function describeSupersetContext({ dashboardId, chartId, filters, timeRange }: SupersetContext): string[] {
++	return [
++		dashboardId && `Dashboard ${dashboardId}`,
++		chartId && `Chart ${chartId}`,
++		timeRange && `Time range: ${timeRange}`,
++		filters && `Filters: ${filters}`,
++	].filter((part): part is string => Boolean(part));
++}
+diff --git a/apps/frontend/src/hooks/use-agent.ts b/apps/frontend/src/hooks/use-agent.ts
+index 5dfb2c1..679c520 100644
+--- a/apps/frontend/src/hooks/use-agent.ts
++++ b/apps/frontend/src/hooks/use-agent.ts
+@@ -10,7 +10,7 @@ import { useMemoObject } from './useMemoObject';
+ import type { UseChatHelpers } from '@ai-sdk/react';
+ import type { UIMessage } from '@nao/backend/chat';
+ import type { ImageUploadData } from '@nao/shared/attachments';
+-import type { CitationData, LlmSelectedModel } from '@nao/shared/types';
++import type { CitationData, LlmSelectedModel, SupersetContext } from '@nao/shared/types';
+ import type { DocumentAttachment } from '@/lib/attachments';
+ import type { QueuedMessage } from '@/types/chat-message-queue';
+ import type { FileUIPart, InferUIMessageChunk } from 'ai';
+@@ -91,6 +91,8 @@ export interface SendMessageArgs {
+ 	/** Files already uploaded to permanent storage, so the message only has to name them. */
+ 	documents?: DocumentAttachment[];
+ 	citations?: CitationData[];
++	/** Where the question was asked from in Superset; sent beside the text, not inside it. */
++	supersetContext?: SupersetContext;
+ 	/** While the agent runs, hands the message to it between two steps instead of queuing it. */
+ 	steer?: boolean;
+ }
+@@ -106,6 +108,7 @@ export const getOnboardingChatIdStorage = (userId: string) =>
+ 	createLocalStorage<string>(`nao-onboarding-chat-id:${userId}`);
+ 
+ const agentCitationStore = new WeakMap<Agent<UIMessage>, CitationData[] | undefined>();
++const agentSupersetContextStore = new WeakMap<Agent<UIMessage>, SupersetContext | undefined>();
+ /** Admin mode captured at send time, so an ack-time toggle cannot mislabel the message. */
+ const agentAdminModeStore = new WeakMap<Agent<UIMessage>, boolean>();
+ 
+@@ -228,6 +231,8 @@ export const useAgent = ({
+ 				const { newId } = dataPart.data;
+ 				const citations = agentCitationStore.get(newAgent);
+ 				agentCitationStore.delete(newAgent);
++				const supersetContext = agentSupersetContextStore.get(newAgent);
++				agentSupersetContextStore.delete(newAgent);
+ 				const sentInAdminMode = agentAdminModeStore.get(newAgent) ?? false;
+ 				agentAdminModeStore.delete(newAgent);
+ 				const lastUserMessageIndex = getLastUserMessageIdx(agent.messages);
+@@ -237,6 +242,7 @@ export const useAgent = ({
+ 								...message,
+ 								id: newId,
+ 								...(citations && { citations }),
++								...(supersetContext && { supersetContext }),
+ 								...(activeMode === 'onboarding'
+ 									? { source: 'onboarding' as const }
+ 									: sentInAdminMode && { source: 'admin' as const }),
+@@ -271,6 +277,7 @@ export const useAgent = ({
+ 					const mentions = activeMentionsRef.current;
+ 					activeMentionsRef.current = [];
+ 					const citations = agentCitationStore.get(newAgent);
++					const supersetContext = agentSupersetContextStore.get(newAgent);
+ 					const images = extractImagesFromMessage(messageToSend);
+ 					const documents = extractDocumentPathsFromMessage(messageToSend);
+ 					const model =
+@@ -292,6 +299,7 @@ export const useAgent = ({
+ 								images: images.length > 0 ? images : undefined,
+ 								documents: documents.length > 0 ? documents : undefined,
+ 								citations,
++								supersetContext,
+ 							},
+ 							model,
+ 							mentions: mentions.length > 0 ? mentions : undefined,
+@@ -526,7 +534,7 @@ export const useAgent = ({
+ 	);
+ 
+ 	const queueOrSendMessage = useCallback(
+-		async ({ text, images, documents, citations, steer }: SendMessageArgs) => {
++		async ({ text, images, documents, citations, supersetContext, steer }: SendMessageArgs) => {
+ 			const prompt = text.trim() || defaultAttachmentPrompt({ images, documents });
+ 			if (!prompt) {
+ 				return;
+@@ -534,6 +542,7 @@ export const useAgent = ({
+ 
+ 			if (!isRunningRef.current) {
+ 				agentCitationStore.set(agentInstance, citations);
++				agentSupersetContextStore.set(agentInstance, supersetContext);
+ 				const files = attachmentsToFileUIParts({ images, documents });
+ 				return handleSendMessage({ text: prompt, files: files.length > 0 ? files : undefined });
+ 			}
+diff --git a/apps/frontend/src/hooks/use-chat-pending-superset-context.ts b/apps/frontend/src/hooks/use-chat-pending-superset-context.ts
+new file mode 100644
+index 0000000..b41593d
+--- /dev/null
++++ b/apps/frontend/src/hooks/use-chat-pending-superset-context.ts
+@@ -0,0 +1,7 @@
++import { useSyncExternalStore } from 'react';
++import type { SupersetContext } from '@nao/shared/types';
++
++import { chatPendingSupersetContextStore } from '@/stores/chat-pending-superset-context';
++
++export const useChatPendingSupersetContext = (): SupersetContext | null =>
++	useSyncExternalStore(chatPendingSupersetContextStore.subscribe, chatPendingSupersetContextStore.getSnapshot);
+diff --git a/apps/frontend/src/lib/superset-link-prefill.test.ts b/apps/frontend/src/lib/superset-link-prefill.test.ts
+new file mode 100644
+index 0000000..9b63cc4
+--- /dev/null
++++ b/apps/frontend/src/lib/superset-link-prefill.test.ts
+@@ -0,0 +1,77 @@
++import { describe, expect, it } from 'vitest';
++import {
++	MAX_CONTEXT_PARAM_LENGTH,
++	MAX_QUESTION_LENGTH,
++	buildSupersetContext,
++	hasSupersetLinkParams,
++	parseSupersetLinkSearch,
++} from './superset-link-prefill';
++
++describe('parseSupersetLinkSearch', () => {
++	it('maps the snake_case link params and coerces the numeric id the router parsed', () => {
++		expect(
++			parseSupersetLinkSearch({
++				q: ' why did revenue drop? ',
++				dashboard_id: 75,
++				chart_id: '456',
++				filters: 'country=US',
++				time_range: 'Last 7 days',
++				autosend: 1,
++			}),
++		).toEqual({
++			q: 'why did revenue drop?',
++			dashboardId: '75',
++			chartId: '456',
++			filters: 'country=US',
++			timeRange: 'Last 7 days',
++			autosend: true,
++		});
++	});
++
++	it('caps every value and leaves autosend undefined when absent', () => {
++		const parsed = parseSupersetLinkSearch({
++			q: 'x'.repeat(MAX_QUESTION_LENGTH + 50),
++			filters: 'y'.repeat(MAX_CONTEXT_PARAM_LENGTH + 50),
++		});
++		expect(parsed.q).toHaveLength(MAX_QUESTION_LENGTH);
++		expect(parsed.filters).toHaveLength(MAX_CONTEXT_PARAM_LENGTH);
++		expect(parsed.autosend).toBeUndefined();
++	});
++
++	it('drops values of an unexpected type', () => {
++		expect(parseSupersetLinkSearch({ q: { a: 1 }, dashboard_id: ['1'] })).toMatchObject({
++			q: undefined,
++			dashboardId: undefined,
++		});
++	});
++});
++
++describe('hasSupersetLinkParams', () => {
++	it('is false for an empty search and true for any one param', () => {
++		expect(hasSupersetLinkParams({})).toBe(false);
++		expect(hasSupersetLinkParams({ autosend: true })).toBe(false);
++		expect(hasSupersetLinkParams({ dashboardId: '13' })).toBe(true);
++	});
++});
++
++describe('buildSupersetContext', () => {
++	it('is undefined when the link carried no identifiers', () => {
++		expect(buildSupersetContext({ q: 'why did revenue drop?' })).toBeUndefined();
++	});
++
++	it('carries whichever identifiers are present, and never the question', () => {
++		expect(
++			buildSupersetContext({
++				q: 'why did revenue drop?',
++				dashboardId: '75',
++				chartId: '456',
++				filters: 'country=US',
++				timeRange: 'Last 7 days',
++			}),
++		).toEqual({ dashboardId: '75', chartId: '456', filters: 'country=US', timeRange: 'Last 7 days' });
++	});
++
++	it('omits absent identifiers rather than carrying undefined keys', () => {
++		expect(buildSupersetContext({ q: 'q', dashboardId: '13' })).toEqual({ dashboardId: '13' });
++	});
++});
+diff --git a/apps/frontend/src/lib/superset-link-prefill.ts b/apps/frontend/src/lib/superset-link-prefill.ts
+new file mode 100644
+index 0000000..cb3e1f0
+--- /dev/null
++++ b/apps/frontend/src/lib/superset-link-prefill.ts
+@@ -0,0 +1,68 @@
++/**
++ * Query params a Superset dashboard sends to the embedded chat:
++ * `?q=<question>&dashboard_id=&chart_id=&filters=&time_range=&autosend=1`.
++ *
++ * Every param arrives from a URL anyone can craft, so each is trimmed and length-capped. Only
++ * identifiers and volatile session state travel on the link; the agent looks dashboard and chart
++ * metadata up in its own project context.
++ */
++
++import { MAX_SUPERSET_CONTEXT_VALUE_LENGTH } from '@nao/shared/types';
++import type { SupersetContext } from '@nao/shared/types';
++
++export const MAX_QUESTION_LENGTH = 2000;
++export const MAX_CONTEXT_PARAM_LENGTH = MAX_SUPERSET_CONTEXT_VALUE_LENGTH;
++
++export interface SupersetLinkSearch {
++	q?: string;
++	dashboardId?: string;
++	chartId?: string;
++	filters?: string;
++	timeRange?: string;
++	autosend?: boolean;
++}
++
++function readCappedString(value: unknown, maxLength: number): string | undefined {
++	// The router's default search parser runs each value through `JSON.parse`, so `dashboard_id=75`
++	// arrives as the number 75; coerce it back to text instead of dropping it.
++	if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
++		return undefined;
++	}
++	const trimmed = String(value).trim().slice(0, maxLength);
++	return trimmed.length > 0 ? trimmed : undefined;
++}
++
++/** TanStack Router `validateSearch` for the Superset link params. */
++export function parseSupersetLinkSearch(search: Record<string, unknown>): SupersetLinkSearch {
++	return {
++		q: readCappedString(search.q, MAX_QUESTION_LENGTH),
++		dashboardId: readCappedString(search.dashboard_id, MAX_CONTEXT_PARAM_LENGTH),
++		chartId: readCappedString(search.chart_id, MAX_CONTEXT_PARAM_LENGTH),
++		filters: readCappedString(search.filters, MAX_CONTEXT_PARAM_LENGTH),
++		timeRange: readCappedString(search.time_range, MAX_CONTEXT_PARAM_LENGTH),
++		// `undefined`, not `false`: the router serializes every defined search field back onto the
++		// URL, so a `false` would survive the post-prefill clear as a stray `?autosend=false`.
++		// The router re-validates its own normalized search, so the already-parsed `true` is accepted too.
++		autosend: search.autosend === '1' || search.autosend === 1 || search.autosend === true ? true : undefined,
++	};
++}
++
++/** True once any Superset link param is present and should be consumed and cleared from the URL. */
++export function hasSupersetLinkParams(search: SupersetLinkSearch): boolean {
++	return Boolean(search.q || search.dashboardId || search.chartId || search.filters || search.timeRange);
++}
++
++/**
++ * The identifiers as the structured field the agent request carries beside the question, never
++ * folded into the text: the backend owns how they are phrased for the model, and the question text
++ * also names the chat. Returns `undefined` when the link carried no identifiers.
++ */
++export function buildSupersetContext(search: SupersetLinkSearch): SupersetContext | undefined {
++	const context: SupersetContext = {
++		...(search.dashboardId && { dashboardId: search.dashboardId }),
++		...(search.chartId && { chartId: search.chartId }),
++		...(search.filters && { filters: search.filters }),
++		...(search.timeRange && { timeRange: search.timeRange }),
++	};
++	return Object.keys(context).length > 0 ? context : undefined;
++}
+diff --git a/apps/frontend/src/stores/chat-pending-superset-context.ts b/apps/frontend/src/stores/chat-pending-superset-context.ts
+new file mode 100644
+index 0000000..e5545f6
+--- /dev/null
++++ b/apps/frontend/src/stores/chat-pending-superset-context.ts
+@@ -0,0 +1,25 @@
++import { Store } from './abstract-store';
++import type { SupersetContext } from '@nao/shared/types';
++
++/**
++ * The Superset identifiers a link arrived with, held between landing on the page and the message
++ * being sent. Shown in the composer and dismissible there: the user can see, and refuse, what rides
++ * along with their question. Not keyed by chat id because the embed always starts a new chat.
++ */
++class ChatPendingSupersetContextStore extends Store<SupersetContext | null> {
++	protected state: SupersetContext | null = null;
++
++	set = (context: SupersetContext) => {
++		this.state = context;
++		this.notify();
++	};
++
++	clear = () => {
++		this.state = null;
++		this.notify();
++	};
++
++	getSnapshot = () => this.state;
++}
++
++export const chatPendingSupersetContextStore = new ChatPendingSupersetContextStore();
+-- 
+2.54.0 (Apple Git-157)
+

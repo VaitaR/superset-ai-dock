@@ -1,0 +1,146 @@
+From b87b86acef29ea1f72ccd68256893adc9556f45a Mon Sep 17 00:00:00 2001
+From: demo <demo@example.invalid>
+Date: Tue, 24 Nov 2026 16:43:24 +0300
+Subject: [PATCH 1/4] feat(embed): frame-ancestors policy for /embed/* routes
+
+SUPERSET_EMBED_ORIGIN names the origin(s) allowed to frame the embedded chat;
+unset keeps the lane same-origin only.
+---
+ apps/backend/src/app.ts                       |  4 ++
+ apps/backend/src/env.ts                       |  4 ++
+ .../src/middleware/embed-frame-ancestors.ts   | 27 ++++++++++
+ .../middleware/embed-frame-ancestors.test.ts  | 51 +++++++++++++++++++
+ 4 files changed, 86 insertions(+)
+ create mode 100644 apps/backend/src/middleware/embed-frame-ancestors.ts
+ create mode 100644 apps/backend/tests/middleware/embed-frame-ancestors.test.ts
+
+diff --git a/apps/backend/src/app.ts b/apps/backend/src/app.ts
+index 0a72f82..7f1b798 100644
+--- a/apps/backend/src/app.ts
++++ b/apps/backend/src/app.ts
+@@ -57,6 +57,7 @@ import {
+ import { STRIPE_WEBHOOK_PROCESS_JOB_NAME, stripeWebhookProcessHandler } from './handlers/stripe-webhook.handler';
+ import { flushTelemetry, requestTracingEnabled } from './instrumentation';
+ import { mcpServerRoutes } from './mcp/routes';
++import { applyEmbedFrameAncestors } from './middleware/embed-frame-ancestors';
+ import { registerRequestTracing } from './middleware/request-tracing';
+ import { checkDatabaseConnection } from './queries/health.queries';
+ import { ensureOrganizationSetup } from './queries/organization.queries';
+@@ -196,6 +197,9 @@ if (requestTracingEnabled) {
+ 	registerRequestTracing(app, [HEALTH_PATH]);
+ }
+ 
++// /embed/* only: frame-ancestors scoped to SUPERSET_EMBED_ORIGIN, so a dashboard tile can frame the chat.
++app.addHook('onSend', applyEmbedFrameAncestors);
++
+ // Log HTTP requests to the database (skip log-polling to avoid self-referential noise)
+ app.addHook('onResponse', (request, reply, done) => {
+ 	if (
+diff --git a/apps/backend/src/env.ts b/apps/backend/src/env.ts
+index b73bd68..7a74b3e 100644
+--- a/apps/backend/src/env.ts
++++ b/apps/backend/src/env.ts
+@@ -176,6 +176,10 @@ const baseRawEnvSchema = z.object({
+ 		.transform((val) => val?.trim() || undefined)
+ 		.pipe(z.url({ message: 'GITLAB_REDIRECT_URI must be a valid URL' }).optional()),
+ 
++	// Origin(s) allowed to frame the /embed/* routes, space-separated (e.g. a Superset dashboard tile
++	// embedding the chat). Pasted verbatim after `frame-ancestors`. Unset: only the same origin may frame them.
++	SUPERSET_EMBED_ORIGIN: optionalNonEmptyString,
++
+ 	CLOUD_GITHUB_PROJECT_SKIP_PUBLISHING: z
+ 		.enum(['true', 'false'])
+ 		.optional()
+diff --git a/apps/backend/src/middleware/embed-frame-ancestors.ts b/apps/backend/src/middleware/embed-frame-ancestors.ts
+new file mode 100644
+index 0000000..a26c733
+--- /dev/null
++++ b/apps/backend/src/middleware/embed-frame-ancestors.ts
+@@ -0,0 +1,27 @@
++import type { FastifyReply, FastifyRequest } from 'fastify';
++
++import { env } from '../env';
++
++const EMBED_PATH_PREFIX = '/embed';
++
++/** True for `/embed` and any `/embed/...` path, the client-routed lane in apps/frontend/src/routes/embed*. */
++export function isEmbedPath(url: string): boolean {
++	const pathname = url.split('?', 1)[0];
++	return pathname === EMBED_PATH_PREFIX || pathname.startsWith(`${EMBED_PATH_PREFIX}/`);
++}
++
++/**
++ * `onSend` hook: only the /embed/* lane gets a framing policy. `SUPERSET_EMBED_ORIGIN` is pasted verbatim
++ * after `frame-ancestors`, so several origins go space-separated; unset keeps the lane same-origin only.
++ * `X-Frame-Options` cannot name one foreign origin, which is why this is a CSP directive.
++ */
++export async function applyEmbedFrameAncestors(
++	request: FastifyRequest,
++	reply: FastifyReply,
++	payload: unknown,
++): Promise<unknown> {
++	if (isEmbedPath(request.url)) {
++		reply.header('content-security-policy', `frame-ancestors ${env.SUPERSET_EMBED_ORIGIN ?? "'self'"}`);
++	}
++	return payload;
++}
+diff --git a/apps/backend/tests/middleware/embed-frame-ancestors.test.ts b/apps/backend/tests/middleware/embed-frame-ancestors.test.ts
+new file mode 100644
+index 0000000..6768d60
+--- /dev/null
++++ b/apps/backend/tests/middleware/embed-frame-ancestors.test.ts
+@@ -0,0 +1,51 @@
++import '../../src/env';
++
++import fastify from 'fastify';
++import { afterEach, describe, expect, it } from 'vitest';
++
++import { __reloadEnvForTesting } from '../../src/env';
++import { applyEmbedFrameAncestors } from '../../src/middleware/embed-frame-ancestors';
++
++const ORIGIN_ENV_KEY = 'SUPERSET_EMBED_ORIGIN';
++const previousOrigin = process.env[ORIGIN_ENV_KEY];
++
++const csp = async (url: string, origin: string | undefined) => {
++	if (origin === undefined) {
++		delete process.env[ORIGIN_ENV_KEY];
++	} else {
++		process.env[ORIGIN_ENV_KEY] = origin;
++	}
++	__reloadEnvForTesting();
++
++	const app = fastify({ logger: false });
++	app.addHook('onSend', applyEmbedFrameAncestors);
++	app.get('/embed/chat', async () => ({ ok: true }));
++	app.get('/api/whoami', async () => ({ ok: true }));
++	await app.ready();
++	return (await app.inject({ method: 'GET', url })).headers['content-security-policy'];
++};
++
++describe('embed frame-ancestors', () => {
++	afterEach(() => {
++		if (previousOrigin === undefined) {
++			delete process.env[ORIGIN_ENV_KEY];
++		} else {
++			process.env[ORIGIN_ENV_KEY] = previousOrigin;
++		}
++		__reloadEnvForTesting();
++	});
++
++	it('lets the configured origins frame an embed route', async () => {
++		expect(await csp('/embed/chat?dashboard_id=1', 'http://localhost:8088 https://bi.example.com')).toBe(
++			'frame-ancestors http://localhost:8088 https://bi.example.com',
++		);
++	});
++
++	it('keeps an embed route same-origin only when nothing is configured', async () => {
++		expect(await csp('/embed/chat', undefined)).toBe("frame-ancestors 'self'");
++	});
++
++	it('leaves every other route without a policy', async () => {
++		expect(await csp('/api/whoami', 'http://localhost:8088')).toBeUndefined();
++	});
++});
+-- 
+2.54.0 (Apple Git-157)
+
