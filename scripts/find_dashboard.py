@@ -5,6 +5,7 @@ import argparse
 import http.cookiejar
 import json
 import sys
+import urllib.parse
 import urllib.request
 
 
@@ -25,7 +26,7 @@ def main() -> None:
         headers=headers,
     )
     headers["Authorization"] = "Bearer " + json.load(opener.open(login))["access_token"]
-    q = json.dumps({"page_size": 100})
+    q = urllib.parse.quote(json.dumps({"page_size": 100}))
     result = json.load(opener.open(urllib.request.Request(f"{api}/dashboard/?q={q}", headers=headers)))["result"]
     for d in result:
         if d["dashboard_title"] == a.title:

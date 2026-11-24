@@ -12,6 +12,7 @@ import http.cookiejar
 import json
 import pathlib
 import re
+import urllib.parse
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -51,8 +52,9 @@ def main() -> None:
     for old in list((out / "dashboards").glob("*.md")) + list((out / "datasets").glob("*.md")):
         old.unlink()
 
-    dashboards = get("/dashboard/?q=" + json.dumps({"page_size": 100, "order_column": "id"}))["result"]
-    datasets_seen: dict[int, dict] = {}
+    dashboards = get("/dashboard/?q=" + urllib.parse.quote(json.dumps({"page_size": 100})))["result"]
+    dashboards.sort(key=lambda d: d["id"])
+    datasets_seen = {}
     index = []
 
     for summary in dashboards:
@@ -82,16 +84,20 @@ def main() -> None:
             dsid = form.get("datasource", "").split("__")[0]
             if dsid.isdigit() and int(dsid) in ds_by_id:
                 ds_name = f", reads `{ds_by_id[int(dsid)]['table_name']}`"
-            lines.append(f"- Chart {ch['id']}: {ch['slice_name']} ({ch.get('viz_type', 'unknown')}{ds_name})")
+            lines.append(f"- Chart {ch['id']}: {ch['slice_name']} ({ch.get('viz_type') or form.get('viz_type', 'unknown')}{ds_name})")
         lines += ["", "## Native filters", ""]
         if not filters:
             lines.append("- None.")
         for f in filters:
-            targets = [
-                f"`{t['datasetId'] and ds_by_id.get(t['datasetId'], {}).get('table_name', t['datasetId'])}`"
-                + (f".`{t['column']['name']}`" if t.get("column") else "")
-                for t in f.get("targets", [])
-            ]
+            targets = []
+            for t in f.get("targets", []):
+                dsid = t.get("datasetId")
+                name = ds_by_id.get(dsid, {}).get("table_name") if dsid is not None else None
+                col = (t.get("column") or {}).get("name")
+                if name and col:
+                    targets.append(f"`{name}`.`{col}`")
+                elif name or col:
+                    targets.append(f"`{name or col}`")
             lines.append(f"- {f.get('name', f['id'])} ({f.get('filterType', 'unknown')})"
                          + (f" on {', '.join(targets)}" if targets else ""))
         path = out / "dashboards" / f"{did}-{slugify(dash['dashboard_title'])}.md"
