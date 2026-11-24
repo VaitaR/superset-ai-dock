@@ -81,3 +81,9 @@ and its filter sync. Upstream already has the shared-chart embed layout the new 
 the frontend is built.
 
 The numbers behind the article are in [EFFORT.md](EFFORT.md).
+
+## Screenshots and video
+
+With the stack up, `PW_DIR=<dir with playwright-core> node scripts/capture.mjs` writes the collapsed
+and expanded dock, one answered question and the raw recording to `media/` and `.work/video/`
+(both gitignored; the question needs `OPENAI_API_KEY` in the environment of `up.sh`).
