@@ -1,0 +1,5 @@
+.work/
+media/
+.env
+*.log
+__pycache__/
