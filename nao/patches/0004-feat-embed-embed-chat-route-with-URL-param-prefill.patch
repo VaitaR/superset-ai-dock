@@ -1,4 +1,4 @@
-From d4004bc4959bcb79fb3168fec7d73af8e6ddc663 Mon Sep 17 00:00:00 2001
+From a257e9821824af9518e3f88d7699cafa757dd683 Mon Sep 17 00:00:00 2001
 From: demo <demo@example.invalid>
 Date: Tue, 24 Nov 2026 17:01:46 +0300
 Subject: [PATCH 4/4] feat(embed): /embed/chat route with URL-param prefill
@@ -6,8 +6,8 @@ Subject: [PATCH 4/4] feat(embed): /embed/chat route with URL-param prefill
 ---
  .../hooks/use-superset-embed-prefill.test.ts  | 62 +++++++++++++
  .../src/hooks/use-superset-embed-prefill.ts   | 48 ++++++++++
- apps/frontend/src/routes/embed.chat.tsx       | 91 +++++++++++++++++++
- 3 files changed, 201 insertions(+)
+ apps/frontend/src/routes/embed.chat.tsx       | 92 +++++++++++++++++++
+ 3 files changed, 202 insertions(+)
  create mode 100644 apps/frontend/src/hooks/use-superset-embed-prefill.test.ts
  create mode 100644 apps/frontend/src/hooks/use-superset-embed-prefill.ts
  create mode 100644 apps/frontend/src/routes/embed.chat.tsx
@@ -136,10 +136,10 @@ index 0000000..b13bcfe
 +}
 diff --git a/apps/frontend/src/routes/embed.chat.tsx b/apps/frontend/src/routes/embed.chat.tsx
 new file mode 100644
-index 0000000..8a90c20
+index 0000000..d868900
 --- /dev/null
 +++ b/apps/frontend/src/routes/embed.chat.tsx
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,92 @@
 +import { createFileRoute, useNavigate } from '@tanstack/react-router';
 +import { useCallback } from 'react';
 +
@@ -147,7 +147,7 @@ index 0000000..8a90c20
 +import { ChatMessages } from '@/components/chat-messages/chat-messages';
 +import { Button } from '@/components/ui/button';
 +import { Spinner } from '@/components/ui/spinner';
-+import { AgentProvider, useAgentContext } from '@/contexts/agent.provider';
++import { AgentProvider, useAgentContext, useAgentMessages } from '@/contexts/agent.provider';
 +import { SetChatInputCallbackProvider, useSetChatInputCallback } from '@/contexts/set-chat-input-callback';
 +import { useSupersetEmbedPrefill } from '@/hooks/use-superset-embed-prefill';
 +import { useSession } from '@/lib/auth-client';
@@ -204,7 +204,8 @@ index 0000000..8a90c20
 +}
 +
 +function EmbedChatContent() {
-+	const { messages, queueOrSendMessage } = useAgentContext();
++	const { queueOrSendMessage } = useAgentContext();
++	const messages = useAgentMessages();
 +	const setChatInput = useSetChatInputCallback();
 +	const search = Route.useSearch();
 +	const navigate = useNavigate();
