@@ -1,0 +1,20 @@
+project_name: superset-ai-dock
+databases:
+- name: superset-examples
+  type: postgres
+  host: localhost
+  port: 5433
+  database: examples
+  user: superset
+  password: "{{ env('EXAMPLES_DB_PASSWORD') }}"
+  schema_name: public
+  templates:
+  - columns
+  - preview
+  include: []
+  exclude: []
+repos: []
+llm: null
+notion: null
+obsidian: null
+slack: null
