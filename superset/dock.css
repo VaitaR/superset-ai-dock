@@ -1,0 +1,135 @@
+/* Ask-the-agent dock. The sanitizer strips `class`, so the dock is addressed by structure: the <details>
+   that directly holds the agent <iframe>. A tile's position:fixed resolves against
+   .dragdroppable-column (identity transform), so that transform is neutralised outside edit mode. */
+.dashboard:not(.dashboard--editing) .dragdroppable-column:has(details > iframe) {
+	transform: none !important;
+}
+/* The carrier tile itself takes no room in the layout; only its fixed child is visible. */
+.dashboard:not(.dashboard--editing) .grid-row:has(details > iframe) {
+	height: 0;
+	min-height: 0;
+	margin: 0;
+	padding: 0;
+	overflow: visible;
+}
+.dashboard:not(.dashboard--editing) .dashboard-component-chart-holder:has(details > iframe) {
+	background: transparent;
+	border: 0 !important;
+	box-shadow: none;
+	padding: 0;
+}
+/* Any transform on an ancestor becomes the fixed dock's containing block. A dashboard's own
+   `.dashboard-component-chart-holder:hover { transform: translateY(-4px) }` (the carrier is a
+   chart-holder too) moves the dock off screen on hover, which drops the hover and snaps it back:
+   the dock flickers every frame and swallows clicks. */
+.dashboard:not(.dashboard--editing) .dashboard-component-chart-holder:has(details > iframe),
+.dashboard:not(.dashboard--editing) .dashboard-component-chart-holder:has(details > iframe):hover {
+	transform: none !important;
+	transition: none !important;
+}
+.dashboard-markdown details:has(> iframe) {
+	position: fixed;
+	right: 24px;
+	bottom: 24px;
+	z-index: 1000;
+}
+.dashboard-markdown details:has(> iframe) summary {
+	list-style: none;
+	cursor: pointer;
+	user-select: none;
+}
+.dashboard-markdown details:has(> iframe) summary::-webkit-details-marker {
+	display: none;
+}
+.dashboard-markdown details:has(> iframe):not([open]) > summary {
+	background: linear-gradient(180deg, #2f80ff 0%, #0061f2 100%);
+	color: #fff;
+	border-radius: 10px;
+	padding: 11px 20px;
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	box-shadow:
+		0 2px 6px rgba(0, 0, 0, 0.22),
+		0 6px 16px rgba(0, 0, 0, 0.16);
+}
+.dashboard-markdown details:has(> iframe):not([open]) > summary:hover {
+	background: linear-gradient(180deg, #1f72f2 0%, #0050c8 100%);
+}
+/* Panel chrome uses neutral light colours. The
+   frame's own theme is the agent's (saved choice, else the system's), which this page cannot read; the
+   dark block below matches the system case. */
+.dashboard-markdown details[open]:has(> iframe) {
+	width: 420px;
+	background: #fff;
+	border: 1px solid rgba(0, 0, 0, 0.1);
+	border-radius: 10px;
+	box-shadow:
+		0 2px 6px rgba(0, 0, 0, 0.08),
+		0 10px 30px rgba(0, 0, 0, 0.16);
+	overflow: hidden;
+}
+.dashboard-markdown details[open]:has(> iframe):has(> details[open]) {
+	width: min(880px, 78vw);
+}
+.dashboard-markdown details[open]:has(> iframe) > summary {
+	display: flex;
+	align-items: center;
+	height: 40px;
+	padding: 0 84px 0 14px;
+	border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+	font-size: 13px;
+	font-weight: 600;
+	color: rgba(0, 0, 0, 0.85);
+}
+.dashboard-markdown details[open]:has(> iframe) > summary::after {
+	content: '\2715';
+	position: absolute;
+	right: 14px;
+	top: 10px;
+	color: rgba(0, 0, 0, 0.45);
+}
+.dashboard-markdown details:has(> iframe) > details {
+	position: absolute;
+	right: 44px;
+	top: 9px;
+}
+.dashboard-markdown details:not([open]):has(> iframe) > details {
+	display: none;
+}
+.dashboard-markdown details:has(> iframe) > details > summary {
+	color: rgba(0, 0, 0, 0.45);
+}
+.dashboard-markdown details:has(> iframe) > details > summary::before {
+	content: '\2922';
+}
+.dashboard-markdown details:has(> iframe) > details[open] > summary::before {
+	content: '\2921';
+}
+.dashboard-markdown details:has(> iframe) > iframe {
+	display: block;
+	width: 100%;
+	height: min(560px, 62vh);
+	border: 0;
+}
+.dashboard-markdown details:has(> iframe):has(> details[open]) > iframe {
+	height: min(760px, 80vh);
+}
+/* Dark palette for a dark system theme. */
+@media (prefers-color-scheme: dark) {
+	.dashboard-markdown details[open]:has(> iframe) {
+		background: #17181c;
+		border-color: rgba(255, 255, 255, 0.1);
+		box-shadow:
+			0 2px 6px rgba(0, 0, 0, 0.3),
+			0 10px 30px rgba(0, 0, 0, 0.5);
+	}
+	.dashboard-markdown details[open]:has(> iframe) > summary {
+		border-bottom-color: rgba(255, 255, 255, 0.1);
+		color: #f8fafc;
+	}
+	.dashboard-markdown details[open]:has(> iframe) > summary::after,
+	.dashboard-markdown details:has(> iframe) > details > summary {
+		color: rgba(255, 255, 255, 0.5);
+	}
+}
