@@ -1,4 +1,4 @@
-From a257e9821824af9518e3f88d7699cafa757dd683 Mon Sep 17 00:00:00 2001
+From ca361a322250a53e5766629a8a5cf10fb35119b0 Mon Sep 17 00:00:00 2001
 From: demo <demo@example.invalid>
 Date: Tue, 24 Nov 2026 17:01:46 +0300
 Subject: [PATCH 4/4] feat(embed): /embed/chat route with URL-param prefill
@@ -136,7 +136,7 @@ index 0000000..b13bcfe
 +}
 diff --git a/apps/frontend/src/routes/embed.chat.tsx b/apps/frontend/src/routes/embed.chat.tsx
 new file mode 100644
-index 0000000..d868900
+index 0000000..394a842
 --- /dev/null
 +++ b/apps/frontend/src/routes/embed.chat.tsx
 @@ -0,0 +1,92 @@
@@ -222,7 +222,7 @@ index 0000000..d868900
 +	});
 +
 +	return (
-+		<div className='flex h-full min-h-0 flex-1 flex-col bg-panel'>
++		<div className='flex h-dvh min-h-0 flex-col bg-panel'>
 +			{messages.length > 0 && (
 +				<div className='min-h-0 flex-1'>
 +					<ChatMessages />
